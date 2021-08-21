@@ -9,6 +9,7 @@
 #include <GLFW/glfw3.h>
 
 // App defines
+
 #define _WIDTH 800
 #define _HEIGHT 600
 
@@ -16,6 +17,21 @@
 #define RASPI 
 
 #define OK 0
+
+VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(\
+	VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,\
+	VkDebugUtilsMessageTypeFlagsEXT messageType,\
+	const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,\
+	void* pUserData);
+VkResult CreateDebugUtilsMessengerEXT(VkInstance instance,\
+        const VkDebugUtilsMessengerCreateInfoEXT* pCreateInfo, \
+        const VkAllocationCallbacks* pAllocator, \
+        VkDebugUtilsMessengerEXT* pDebugMessenger);
+void DestroyDebugUtilsMessengerEXT(VkInstance instance,\
+        const VkDebugUtilsMessengerEXT debugMessenger, \
+        const VkAllocationCallbacks* pAllocator);
+void populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo);
+
 
 class HelloTriangleApplication
 {

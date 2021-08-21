@@ -1,9 +1,12 @@
 
 #include <iostream>
 #include <stdexcept>
+#define GLFW_INCLUDE_VULKAN 
+#include <GLFW/glfw3.h>
 
 // App
 #include "HelloTriangle.hpp"
+
 
 int main()
 {

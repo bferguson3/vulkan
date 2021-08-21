@@ -48,13 +48,31 @@ int HelloTriangleApplication::initVulkan()
 		return OK;
 }
 
+
+
 void HelloTriangleApplication::setupDebugMessenger()
 {
 	if (!enableValidationLayers) return;
 
 	VkDebugUtilsMessengerCreateInfoEXT createInfo{};
+	populateDebugMessengerCreateInfo(createInfo);
+	/*
 	createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+	createInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | \
+		VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | \
+		VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+	createInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | \
+		VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | \
+		VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+	createInfo.pfnUserCallback = debugCallback;
+	createInfo.pUserData = nullptr; //opt
+	*/
+	if(CreateDebugUtilsMessengerEXT(instance, &createInfo, nullptr, &debugMessenger) != VK_SUCCESS)
+	{
+		throw std::runtime_error("failed to setup debug messenger.");
+	}
 }
+
 
 VkResult HelloTriangleApplication::createInstance()
 {
@@ -97,14 +115,19 @@ VkResult HelloTriangleApplication::createInstance()
 	createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
 	createInfo.ppEnabledExtensionNames = extensions.data();
 	
+	VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo;
 	// store validation layers
 	if (enableValidationLayers)
 	{
 		createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
 		createInfo.ppEnabledLayerNames = validationLayers.data();
+		// allot debugger for instance create/destroy:
+		populateDebugMessengerCreateInfo(debugCreateInfo);
+		createInfo.pNext = (VkDebugUtilsMessengerCreateInfoEXT*)&debugCreateInfo;
 	}
 	else {
 		createInfo.enabledLayerCount = 0;
+		createInfo.pNext = nullptr;
 	}
 
 	// finally create vulkan instance
@@ -198,20 +221,17 @@ bool HelloTriangleApplication::checkValidationLayerSupport()
 		return true;
 }
 
-static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(\
-	VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,\
-	VkDebugUtilsMessageTypeFlagsEXT messageType,\
-	const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,\
-	void* pUserData)
-{
-	std::cerr << "validation layer: " << pCallbackData->pMessage << std::endl;
-	return VK_FALSE;
-}
 
 // * APP CLEANUP * // 
 void HelloTriangleApplication::cleanup()
 {
+		if(enableValidationLayers){
+			DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
+		}
 		vkDestroyInstance(instance, nullptr);
 		glfwDestroyWindow(window);
 		glfwTerminate();
+		#ifdef DEBUG 
+		printf("DEBUG: Process cleaned up OK.\n");
+		#endif 
 }
