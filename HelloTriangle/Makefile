@@ -6,7 +6,7 @@ default: main.cpp
 
 .PHONY: test clean 
 
-test: 
+test: default
 	./$(APPNAME)
 
 clean:
