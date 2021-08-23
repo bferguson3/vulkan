@@ -14,7 +14,7 @@
 #define _HEIGHT 600
 
 #define DEBUG 
-#define RASPI 
+//#define RASPI 
 
 #define OK 0
 

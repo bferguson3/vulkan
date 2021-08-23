@@ -196,14 +196,14 @@ bool HelloTriangleApplication::checkValidationLayerSupport()
 		vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
 		std::vector<VkLayerProperties> availableLayers(layerCount);
 		vkEnumerateInstanceLayerProperties(&layerCount, availableLayers.data());
-		//printf("Layers: %d\n", layerCount);
+		printf("Layers: %d\n", layerCount);
 		for(const char* layerName : validationLayers) 
 		{
-			//printf("validation layers: %s\n", layerName);
+			printf("validation layers required: %s\n", layerName);
 			bool layerFound = false;
 			for(const auto& layerProperties : availableLayers)
 			{
-				//printf("found layers: %s\n", layerProperties.layerName);
+				printf("found layers: %s\n", layerProperties.layerName);
 				if (strcmp(layerName, layerProperties.layerName) == 0)
 				{
 					#ifdef DEBUG
