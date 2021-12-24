@@ -6,17 +6,25 @@ VULKAN_SDK=/usr/
 #VK_ICD_FILENAMES=$(VULKAN_SDK)/share/vulkan/icd.d/broadcom_icd.aarch64.json
 LIBS=-L$(VULKAN_SDK)/lib
 INCS=-I$(VULKAN_SDK)/include
+GLC:=glslc
 
-default: main.cpp
-	g++ $(CFLAGS) $(LIBS) $(INCS)  -o $(APPNAME) benvulkan.cpp HelloTriangle.cpp main.cpp $(LDFLAGS)
+default: shaders
+	g++ $(CFLAGS) $(LIBS) $(INCS) -o $(APPNAME) benvulkan.cpp HelloTriangle.cpp main.cpp $(LDFLAGS)
+
+shaders: shaders/hello.frag.spv shaders/hello.vert.spv 
+
+%.frag.spv: %.frag
+	$(GLC) $< -o $@
+%.vert.spv: %.vert
+	$(GLC) $< -o $@
 
 .PHONY: test clean 
 
-test: default
-	export VK_LAYER_PATH=$(VK_LAYER_PATH);\
-	export VK_ICD_FILENAMES=$(VK_ICD_FILENAMES);\
-	./$(APPNAME)
+#test: default
+#	export VK_LAYER_PATH=$(VK_LAYER_PATH);\
+#	export VK_ICD_FILENAMES=$(VK_ICD_FILENAMES);\
+#	./$(APPNAME)
 
 clean:
-	rm -f $(APPNAME)
-
+	rm -rf $(APPNAME)
+	rm -rf shaders/*.spv 

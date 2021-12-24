@@ -38,12 +38,12 @@ void HelloTriangleApplication::initWindow()
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 	glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 
-	window = glfwCreateWindow(WIDTH, HEIGHT, "Ben Vulkan", nullptr, nullptr);
+	window = glfwCreateWindow(WIDTH, HEIGHT, WINDOW_TITLE, nullptr, nullptr);
 }
 
 int HelloTriangleApplication::initVulkan()
 {
-	if(createInstance() != VK_SUCCESS)
+	if(createInstance(instance) != VK_SUCCESS)
 		throw std::runtime_error("failed to make Vulkan instance.\n");
 	
 	if(!checkExtensions())
@@ -56,8 +56,80 @@ int HelloTriangleApplication::initVulkan()
 	pickPhysicalDevice();
 	createLogicalDevice();
 	createSwapChain();
+	createImageViews();
+	createGraphicsPipeline(); // < exciting!
 
 	return OK;
+}
+
+void HelloTriangleApplication::createGraphicsPipeline()
+{
+	auto vertShaderCode = readBinaryFile("shaders/hello.vert.spv");
+	auto fragShaderCode = readBinaryFile("shaders/hello.frag.spv");
+	VkShaderModule vertShaderModule = createShaderModule(vertShaderCode);
+	VkShaderModule fragShaderModule = createShaderModule(fragShaderCode);
+
+	VkPipelineShaderStageCreateInfo vertShaderStageInfo{};
+	vertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+	vertShaderStageInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
+	vertShaderStageInfo.module = vertShaderModule; // point to the code wrapper
+	vertShaderStageInfo.pName = "main"; // entrypoint of the shader
+
+	VkPipelineShaderStageCreateInfo fragShaderStageInfo{};
+	fragShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+	fragShaderStageInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+	fragShaderStageInfo.module = fragShaderModule;
+	fragShaderStageInfo.pName = "main";
+
+	VkPipelineShaderStageCreateInfo shaderStages[] = { vertShaderStageInfo, fragShaderStageInfo };
+
+	// destroy the shader modules after the pipeline is done
+	vkDestroyShaderModule(device, fragShaderModule, nullptr);
+	vkDestroyShaderModule(device, vertShaderModule, nullptr);
+}
+
+VkShaderModule HelloTriangleApplication::createShaderModule(const std::vector<char>& code)
+{
+	// need to use special function to ensure size is maintained properly when recast to uint32_t*
+	VkShaderModuleCreateInfo createInfo{};
+	createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+	createInfo.codeSize = code.size();
+	createInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
+	
+	VkShaderModule shaderModule;
+	if(vkCreateShaderModule(device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS)
+		throw std::runtime_error("Could not create shader module!\n");
+	
+	return shaderModule;
+}
+
+void HelloTriangleApplication::createImageViews()
+{
+	// obviously should be the same size:
+	swapChainImageViews.resize(swapChainImages.size());
+	for(size_t i = 0; i < swapChainImages.size(); i++)
+	{
+		VkImageViewCreateInfo createInfo{};
+		createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+		createInfo.image = swapChainImages[i];
+		createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D; // standard type as 2d texture
+		createInfo.format = swapChainImageFormat;
+		// here we can swizzle the color channels if we want, but not yet
+		createInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+		createInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+		createInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+		createInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+		// set framebuffer image as a color target with no mipmaps or layers
+		createInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		createInfo.subresourceRange.baseMipLevel = 0;
+		createInfo.subresourceRange.levelCount = 1;
+		createInfo.subresourceRange.baseArrayLayer = 0;
+		createInfo.subresourceRange.layerCount = 1;
+		// if this were stereoscopic, the swapchain would have multiple layers. then 
+		// you would make multiple image views for each image as R/L eyes via layers.
+		if(vkCreateImageView(device, &createInfo, nullptr, &swapChainImageViews[i]) != VK_SUCCESS)
+			throw std::runtime_error("Failed to create image views!\n");
+	}
 }
 
 void HelloTriangleApplication::createSurface()
@@ -178,28 +250,6 @@ QueueFamilyIndices HelloTriangleApplication::findQueueFamilies(VkPhysicalDevice 
 	return indices;
 }
 
-bool HelloTriangleApplication::checkDeviceExtensionSupport(VkPhysicalDevice device)
-{
-	
-	// how many dvc extensions?
-	uint32_t extensionCount;
-	vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, nullptr);
-	// put the data into a new vector
-	std::vector<VkExtensionProperties> availableExtensions(extensionCount);
-	vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, availableExtensions.data());
-	// make a string array of their names, and erase the ones we find...
-	std::set<std::string> requiredExtensions(deviceExtensions.begin(), deviceExtensions.end());
-	for(const auto& extension:availableExtensions)
-	{
-		#ifdef DEBUG 
-			printf("DEBUG: Available extension: %s\n", extension.extensionName);
-		#endif 
-		requiredExtensions.erase(extension.extensionName);
-	}
-	// if its empty, we are good
-	return requiredExtensions.empty();
-}
-
 bool HelloTriangleApplication::isDeviceSuitable(VkPhysicalDevice device)
 {
 	VkPhysicalDeviceProperties deviceProperties;
@@ -214,7 +264,7 @@ bool HelloTriangleApplication::isDeviceSuitable(VkPhysicalDevice device)
 	// swap chain support test - 1 format and 1 present mode OK
 	bool swapChainAdequate = false;
 	if(extensionsSupported){
-		SwapChainSupportDetails swapChainSupport = querySwapChainSupport(device);
+		SwapChainSupportDetails swapChainSupport = querySwapChainSupport(device, surface);
 		swapChainAdequate = !swapChainSupport.formats.empty() && !swapChainSupport.presentModes.empty();
 		#ifdef DEBUG 
 			printf("DEBUG: At least one framebuffer format and display mode found. Continuing...\n");
@@ -225,70 +275,9 @@ bool HelloTriangleApplication::isDeviceSuitable(VkPhysicalDevice device)
 	//return true;
 }
 
-// PIXEL FORMAT AND COLOR DEPTH
-VkSurfaceFormatKHR HelloTriangleApplication::chooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats)
-{
-	for(const auto& availableFormat : availableFormats)
-	{
-		if(availableFormat.format == VK_FORMAT_B8G8R8A8_SRGB && \
-			availableFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
-		{
-			#ifdef DEBUG 
-				printf("DEBUG: Selected priority format and colorspace: B8G8R8A8_SRGB and SRGB_NONLINEAR\n");
-			#endif
-			return availableFormat;
-		}
-	}
-	#ifdef DEBUG 
-		printf("DEBUG: Selected DEFAULT format and colorspace: %d, %d\n", availableFormats[0].format, availableFormats[0].colorSpace);
-	#endif
-	return availableFormats[0];
-}
-
-// VSYNC / RELAXED VSYNC / TRIPLE BUFFERING
-VkPresentModeKHR chooseSwapPresentMode(const std::vector<VkPresentModeKHR>& availablePresentModes)
-{
-	for(const auto& availablePresentMode : availablePresentModes )
-	{
-		if(availablePresentMode == VK_PRESENT_MODE_MAILBOX_KHR)
-		{
-			#ifdef DEBUG 
-				printf("DEBUG: Selecting Mailbox presentation mode (triple buf)\n");
-			#endif 
-			return availablePresentMode;
-		}
-	}
-
-	#ifdef DEBUG 
-		printf("DEBUG: Selecting FIFO presentation mode (vsync)\n");
-	#endif 
-	return VK_PRESENT_MODE_FIFO_KHR;
-}
-
-// RESOLUTION OF SURFACE 
-VkExtent2D HelloTriangleApplication::chooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities)
-{
-	if(capabilities.currentExtent.width != UINT32_MAX)
-	{
-		#ifdef DEBUG 
-			printf("DEBUG: Selected default surface resolution: %d x %d\n", capabilities.currentExtent.width, capabilities.currentExtent.height);
-		#endif 
-		return capabilities.currentExtent;
-	} 
-	else {
-		VkExtent2D actualExtent = { _WIDTH, _HEIGHT };
-		actualExtent.width = std::max(capabilities.minImageExtent.width, std::min(capabilities.maxImageExtent.width, actualExtent.width));
-		actualExtent.height = std::max(capabilities.minImageExtent.height, std::min(capabilities.maxImageExtent.height, actualExtent.height));
-		#ifdef DEBUG 
-			printf("DEBUG: Selected NEW surface resolution: %d x %d\n", actualExtent.width, actualExtent.height);
-		#endif 
-		return actualExtent;
-	}
-}
-
 void HelloTriangleApplication::createSwapChain()
 {
-	SwapChainSupportDetails swapChainSupport = querySwapChainSupport(physicalDevice);
+	SwapChainSupportDetails swapChainSupport = querySwapChainSupport(physicalDevice, surface);
 	VkSurfaceFormatKHR surfaceFormat = chooseSwapSurfaceFormat(swapChainSupport.formats);
 	VkPresentModeKHR presentMode = chooseSwapPresentMode(swapChainSupport.presentModes);
 	VkExtent2D extent = chooseSwapExtent(swapChainSupport.capabilities);
@@ -337,6 +326,16 @@ void HelloTriangleApplication::createSwapChain()
 
 	if(vkCreateSwapchainKHR(device, &createInfo, nullptr, &swapChain) != VK_SUCCESS)
 		throw std::runtime_error("Couldn't create swapchain (aka framebuffer)!\n");
+
+	vkGetSwapchainImagesKHR(device, swapChain, &imageCount, nullptr);
+	swapChainImages.resize(imageCount);
+	#ifdef DEBUG 
+		printf("DEBUG: Framebuffer image count: %d\n", imageCount);
+	#endif 
+	vkGetSwapchainImagesKHR(device, swapChain, &imageCount, swapChainImages.data());
+	
+	swapChainImageFormat = surfaceFormat.format;
+	swapChainExtent = extent;
 }
 
 void HelloTriangleApplication::setupDebugMessenger()
@@ -363,186 +362,15 @@ void HelloTriangleApplication::setupDebugMessenger()
 }
 
 
-VkResult HelloTriangleApplication::createInstance()
-{
-	// validation layer check - only if debug mode
-	if(enableValidationLayers && !checkValidationLayerSupport())
-	{
-		throw std::runtime_error("Validation layers required. Exiting.\n");
-	}
-	// appInfo
-	VkApplicationInfo appInfo{};
-	appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-	
-	appInfo.pApplicationName = "Hello Triangle";
-	appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
-	
-	appInfo.pEngineName = "Bentgine";
-	appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-	
-	appInfo.apiVersion = VK_API_VERSION_1_0;
-
-	// createInfo (pg 58)
-	VkInstanceCreateInfo createInfo{};
-	createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-	createInfo.pApplicationInfo = &appInfo;
-	
-	// get string array and number of glfw required vulkan extensions
-	uint32_t glfwExtensionCount = 0;
-	const char** glfwExtensions;
-	glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
-	createInfo.enabledExtensionCount = glfwExtensionCount;
-	createInfo.ppEnabledExtensionNames = glfwExtensions;
-	createInfo.enabledLayerCount = 0;
-	
-	// store required gl extensions globally
-	gl_extensions = std::vector<const char*>(glfwExtensionCount);
-	for(uint8_t c = 0; c < glfwExtensionCount; c++){
-		gl_extensions[c] = glfwExtensions[c];
-		#ifdef DEBUG
-			printf("DEBUG: glfw required extension: %s\n", gl_extensions[c]);
-		#endif
-	}
-	auto extensions = getRequiredExtensions();
-	createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
-	createInfo.ppEnabledExtensionNames = extensions.data();
-	
-	//pg58 cont'd
-	VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo;
-	// store validation layers
-	if (enableValidationLayers)
-	{
-		createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
-		createInfo.ppEnabledLayerNames = validationLayers.data();
-		// allot debugger for instance create/destroy:
-		populateDebugMessengerCreateInfo(debugCreateInfo);
-		createInfo.pNext = (VkDebugUtilsMessengerCreateInfoEXT*)&debugCreateInfo;
-	}
-	else {
-		createInfo.enabledLayerCount = 0;
-		createInfo.pNext = nullptr;
-	}
-
-	// finally create vulkan instance
-	VkResult result = vkCreateInstance(&createInfo, nullptr, &instance);
-	return result;
-}
-
-bool HelloTriangleApplication::checkExtensions()
-{
-	uint32_t extensionCount = 0;
-	vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, nullptr);
-	// make 'extensions' array
-	std::vector<VkExtensionProperties> extensions(extensionCount);
-	vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, extensions.data());
-	
-	// Make sure every required GLFW extension exists in our supported extensions
-	uint8_t found = 0;
-	for(uint8_t c = 0; c < gl_extensions.size(); c++)
-	{
-		bool ok = false;
-		for(const auto& extension : extensions) 
-		{
-			const char* key = gl_extensions[c];
-			const char* abv = extension.extensionName;
-			if(strcmp(key,abv) == 0) {
-				found++;
-				ok = true;
-			}
-		}
-		if(!ok)
-		{
-			printf("Error: Required extension %s not found.\n",gl_extensions[c]);
-			return false;
-		}
-	}
-	if(found < gl_extensions.size()){
-		printf("Error: All extensions not found.\n");
-		return false;
-	}
-
-	#ifdef DEBUG
-		printf("DEBUG: Vulkan init OK: %d extensions detected\n", extensionCount);
-	#endif 
-
-	return true;
-}
-
-SwapChainSupportDetails HelloTriangleApplication::querySwapChainSupport(VkPhysicalDevice device)
-{
-	// get the capabilities of the framebuffer, pixel formats, and presentation modes.
-	SwapChainSupportDetails details;
-	vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device, surface, &details.capabilities);
-	
-	uint32_t formatCount;
-	vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &formatCount, nullptr);
-	if(formatCount != 0)
-	{
-		details.formats.resize(formatCount);
-		vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &formatCount, details.formats.data());
-	}
-	
-	uint32_t presentModeCount;
-	vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &presentModeCount, nullptr);
-	if(presentModeCount != 0)
-	{
-		details.presentModes.resize(presentModeCount);
-		vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &presentModeCount, details.presentModes.data());
-	}
-
-	return details;
-}
-
-// gets string[] of extensions required based on validation/debug enabled
-std::vector<const char*> HelloTriangleApplication::getRequiredExtensions() 
-{
-	uint32_t glfwExtensionCount = 0;
-	const char** glfwExtensions;
-	glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
-	std::vector<const char*> extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
-	if(enableValidationLayers)
-		extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-
-	return extensions;
-}
-
-
-bool HelloTriangleApplication::checkValidationLayerSupport()
-{
-	// Get num of layers and layer properties 
-	uint32_t layerCount;
-	vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
-	std::vector<VkLayerProperties> availableLayers(layerCount);
-	vkEnumerateInstanceLayerProperties(&layerCount, availableLayers.data());
-	printf("Layers: %d\n", layerCount);
-	for(const char* layerName : validationLayers) 
-	{
-		printf("validation layers required: %s\n", layerName);
-		bool layerFound = false;
-		for(const auto& layerProperties : availableLayers)
-		{
-			printf("found layers: %s\n", layerProperties.layerName);
-			if (strcmp(layerName, layerProperties.layerName) == 0)
-			{
-				#ifdef DEBUG
-					printf("DEBUG: Validation layer found.\n");
-				#endif 
-
-				layerFound = true;
-				break;
-			}
-		}
-		if(!layerFound) 
-			return false;
-	}
-	
-	return true;
-}
-
 
 // * APP CLEANUP * // 
 void HelloTriangleApplication::cleanup()
 {
+	for (auto imageView:swapChainImageViews)
+	{
+		vkDestroyImageView(device, imageView, nullptr);
+	}
+
 	vkDestroySwapchainKHR(device, swapChain, nullptr); //  before device
 	vkDestroyDevice(device, nullptr); 
 	vkDestroySurfaceKHR(instance, surface, nullptr); // before instance
