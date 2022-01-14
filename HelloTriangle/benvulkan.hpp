@@ -54,6 +54,7 @@ VkResult CreateDebugUtilsMessengerEXT(VkInstance instance,\
 void DestroyDebugUtilsMessengerEXT(VkInstance instance,\
     const VkDebugUtilsMessengerEXT debugMessenger, \
     const VkAllocationCallbacks* pAllocator);
+    
 void populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo);
 bool checkValidationLayerSupport(const std::vector<const char*> validationLayers);
 VkSurfaceFormatKHR chooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats);

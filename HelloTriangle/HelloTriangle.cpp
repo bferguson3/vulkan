@@ -25,8 +25,49 @@ void HelloTriangleApplication::mainLoop()
 	while (!glfwWindowShouldClose(window))
 	{
 		glfwPollEvents();
+		drawFrame();
 	}
 	// cleanup and end
+	vkDeviceWaitIdle(device);
+}
+
+void HelloTriangleApplication::drawFrame()
+{
+	uint32_t imageIndex;
+	// logical device and swapchain from which we get the image
+	// timeout in nanoseconds, or max to disable timeout
+	// signaled sempahore and signaled fence
+	// finally output variable of swapchain image array index that is now available
+	vkAcquireNextImageKHR(device, swapChain, UINT64_MAX, imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
+	// configure queue to wait for color writing on imageavailable
+	VkSubmitInfo submitInfo{};
+	submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+	VkSemaphore waitSemaphores[] = { imageAvailableSemaphore };
+	VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
+	submitInfo.waitSemaphoreCount = 1;
+	submitInfo.pWaitSemaphores = waitSemaphores;
+	submitInfo.pWaitDstStageMask = waitStages;
+	// there are 1 cmd buffer
+	submitInfo.commandBufferCount = 1;
+	submitInfo.pCommandBuffers = &commandBuffers[imageIndex];
+	// configure which semaphore to signal when render is finished
+	VkSemaphore signalSemaphores[] = { renderFinishedSemaphore };
+	submitInfo.signalSemaphoreCount = 1;
+	submitInfo.pSignalSemaphores = signalSemaphores;
+	if(vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE)!=VK_SUCCESS)
+		throw std::runtime_error("Failed to submit draw command buffer!\n");
+	
+	VkPresentInfoKHR presentInfo{};
+	presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+	presentInfo.waitSemaphoreCount = 1;
+	presentInfo.pWaitSemaphores = signalSemaphores; // just like submitinfo
+	VkSwapchainKHR swapChains[] = {swapChain}; // one swapchain
+	presentInfo.swapchainCount = 1;
+	presentInfo.pSwapchains = swapChains;
+	presentInfo.pImageIndices = &imageIndex; // almost always 1
+	presentInfo.pResults = nullptr;
+	vkQueuePresentKHR(presentQueue, &presentInfo);
+	vkQueueWaitIdle(presentQueue);
 }
 
 // * GLFW / VULKAN INIT * // 
@@ -57,9 +98,154 @@ int HelloTriangleApplication::initVulkan()
 	createLogicalDevice();
 	createSwapChain();
 	createImageViews();
+	createRenderPass();
 	createGraphicsPipeline(); // < exciting!
-
+	createFramebuffers();
+	createCommandPool();
+	createCommandBuffers();
+	createSemaphores();
 	return OK;
+}
+
+void HelloTriangleApplication::createSemaphores()
+{
+	VkSemaphoreCreateInfo semaphoreInfo{};
+	semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+	if(vkCreateSemaphore(device, &semaphoreInfo, nullptr, &imageAvailableSemaphore) != VK_SUCCESS || \
+		vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderFinishedSemaphore) != VK_SUCCESS)
+		throw std::runtime_error("Failed to create semaphores!\n");
+}
+
+// create buffer for drawing commands
+void HelloTriangleApplication::createCommandBuffers()
+{
+	commandBuffers.resize(swapChainFramebuffers.size());
+	VkCommandBufferAllocateInfo allocInfo{};
+	allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+	allocInfo.commandPool = commandPool;
+	allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; // secondary means it will be called from another primary command buffer
+	allocInfo.commandBufferCount = (uint32_t)commandBuffers.size();
+	if(vkAllocateCommandBuffers(device, &allocInfo, commandBuffers.data())!=VK_SUCCESS)
+		throw std::runtime_error("Failed to allocate command buffers!\n");
+	for(size_t i = 0; i < commandBuffers.size(); i++)
+	{
+		VkCommandBufferBeginInfo beginInfo{};
+		beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+		beginInfo.flags = 0; // contains timing for submitting command buffer usage
+		beginInfo.pInheritanceInfo = nullptr; // for secondary command buffers
+		if(vkBeginCommandBuffer(commandBuffers[i], &beginInfo)!=VK_SUCCESS)
+			throw std::runtime_error("Failed to begin recording command buffer!\n");
+		
+		VkRenderPassBeginInfo renderPassInfo{};
+		renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+		renderPassInfo.renderPass = renderPass;
+		renderPassInfo.framebuffer = swapChainFramebuffers[i];
+		renderPassInfo.renderArea.offset = {0, 0};
+		renderPassInfo.renderArea.extent = swapChainExtent;
+		VkClearValue clearColor = {0.0f, 0.0f, 0.0f, 1.0f}; // clear color = black
+		renderPassInfo.clearValueCount = 1;
+		renderPassInfo.pClearValues = &clearColor;
+		// render pass cmds are in primary command buffer
+		vkCmdBeginRenderPass(commandBuffers[i], &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE); 
+		// configure pipline bind point as graphics pipline
+		vkCmdBindPipeline(commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+		
+		// now draw!
+		// vertex count, instance count (for instanced rendering), 
+		//   first vertex (gl_VertexIndex), first instance offset (for instanced rendering) (gl_InstanceIndex)
+		
+		vkCmdDraw(commandBuffers[i], 3, 1, 0, 0);
+		
+		vkCmdEndRenderPass(commandBuffers[i]);
+
+		if(vkEndCommandBuffer(commandBuffers[i])!=VK_SUCCESS)
+			throw std::runtime_error("Failed to record command buffer!\n");
+	}
+	
+}
+
+// create pool to hold draw command buffers
+void HelloTriangleApplication::createCommandPool()
+{
+	QueueFamilyIndices queueFamilyIndices = findQueueFamilies(physicalDevice);
+	
+	VkCommandPoolCreateInfo poolInfo{};
+	poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+	poolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily.value();
+	poolInfo.flags = 0; // if you want to change cmd buffers at runtime need flags
+	if(vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool)!=VK_SUCCESS)
+		throw std::runtime_error("Failed to create Vulkan command pool!\n");
+}
+
+void HelloTriangleApplication::createFramebuffers()
+{
+	// resize framebuffer to size of swapchain image views
+	swapChainFramebuffers.resize(swapChainImageViews.size());
+	for(size_t i = 0; i < swapChainImageViews.size(); i++)
+	{
+		VkImageView attachments[] = { swapChainImageViews[i] };
+		// set the framebuffer to have a single swapchain image view and single layer
+		VkFramebufferCreateInfo framebufferInfo{};
+		framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+		framebufferInfo.renderPass = renderPass;
+		framebufferInfo.attachmentCount = 1;
+		framebufferInfo.pAttachments = attachments;
+		framebufferInfo.width = swapChainExtent.width;
+		framebufferInfo.height = swapChainExtent.height;
+		framebufferInfo.layers = 1;
+		if(vkCreateFramebuffer(device, &framebufferInfo, nullptr, &swapChainFramebuffers[i]) != VK_SUCCESS)
+			throw std::runtime_error("Failed to create framebuffer!");
+	}
+	
+	#ifdef DEBUG 
+		printf("DEBUG: All framebuffers created successfully!\n");
+	#endif 
+}
+
+void HelloTriangleApplication::createRenderPass()
+{
+	// we have a single color buffer attachment
+	VkAttachmentDescription colorAttachment{};
+	colorAttachment.format = swapChainImageFormat;
+	colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+	// clear framebuffer and enable write
+	colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	// set stencil buffer (if it exists) to the same
+	colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
+	// this attachment does not care about initial fb format, and we want it in swapchain format
+	colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+	// enable a subpass with color buffer optimization
+	VkAttachmentReference colorAttachmentRef{};
+	colorAttachmentRef.attachment = 0;
+	colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+	VkSubpassDescription subpass{};
+	subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS; // graphics subpass, not compute.
+	subpass.colorAttachmentCount = 1;
+	subpass.pColorAttachments = &colorAttachmentRef; // in the frag shader, this is layout location 0
+	// finally, assemble the renderpass
+	VkRenderPassCreateInfo renderPassInfo{};
+	renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+	renderPassInfo.attachmentCount = 1;
+	renderPassInfo.pAttachments = &colorAttachment;
+	renderPassInfo.subpassCount = 1;
+	renderPassInfo.pSubpasses = &subpass;
+	// 
+	VkSubpassDependency dependency{};
+	dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+	dependency.dstSubpass = 0; // dependency and subpass index
+	dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+	dependency.srcAccessMask = 0; // operations to wait on and what stage
+	dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+	dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT; // operations that will wait
+	renderPassInfo.dependencyCount = 1;
+	renderPassInfo.pDependencies = &dependency;
+
+	if(vkCreateRenderPass(device, &renderPassInfo, nullptr, &renderPass)!= VK_SUCCESS)
+		throw std::runtime_error("Could not create render pass!\n");
+
 }
 
 void HelloTriangleApplication::createGraphicsPipeline()
@@ -81,7 +267,131 @@ void HelloTriangleApplication::createGraphicsPipeline()
 	fragShaderStageInfo.module = fragShaderModule;
 	fragShaderStageInfo.pName = "main";
 
+	// Create a pipeline that is only vertex and fragment
 	VkPipelineShaderStageCreateInfo shaderStages[] = { vertShaderStageInfo, fragShaderStageInfo };
+
+	// how are we loading the vertices? (we aren't for now)
+	VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
+	vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+	vertexInputInfo.vertexBindingDescriptionCount = 0;
+	vertexInputInfo.pVertexBindingDescriptions = nullptr;
+	vertexInputInfo.vertexAttributeDescriptionCount = 0;
+	vertexInputInfo.pVertexAttributeDescriptions = nullptr;
+
+	// how are we going to draw the vertices?
+	VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+	inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+	inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+	inputAssembly.primitiveRestartEnable = VK_FALSE;
+
+	// set viewport to min/max bounds of framebuffer
+	VkViewport viewport{};
+	viewport.x = 0.0f;
+	viewport.y = 0.0f;
+	viewport.width = (float)swapChainExtent.width;
+	viewport.height = (float)swapChainExtent.height;
+	viewport.minDepth = 0.0f;
+	viewport.maxDepth = 1.0f; // framebuffer depth
+
+	// scissor/crop set to entire image
+	VkRect2D scissor{};
+	scissor.offset = {0, 0}; // start
+	scissor.extent = swapChainExtent; // end
+
+	// viewport + scissor = viewport state
+	VkPipelineViewportStateCreateInfo viewportState{};
+	viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+	viewportState.viewportCount = 1;
+	viewportState.pViewports = &viewport;
+	viewportState.scissorCount = 1;
+	viewportState.pScissors = &scissor;
+
+	// rasterizer = depth test, culling, scissor test, and finally create fragment
+	VkPipelineRasterizationStateCreateInfo rasterizer{};
+	rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+	rasterizer.depthClampEnable = VK_FALSE; // requires gpu feature, for shadowmap test
+	rasterizer.rasterizerDiscardEnable = VK_FALSE; // enable output to framebuffer
+	rasterizer.polygonMode = VK_POLYGON_MODE_FILL; // FILL, LINE, POINT. requires gpu feature.
+	rasterizer.lineWidth = 1.0f; // lines are 1 fragment in width
+	rasterizer.cullMode = VK_CULL_MODE_BACK_BIT; // cull back faces
+	rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE; // clockwise face order
+	rasterizer.depthBiasEnable = VK_FALSE; // for shadowmapping
+	//rasterizer.depthBiasConastantFactor, BiasClamp, BiasSlopeFactor
+
+	// multisampling (eg for AA) - requires gpu feature, disable for now
+	VkPipelineMultisampleStateCreateInfo multisampling{};
+	multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+	multisampling.sampleShadingEnable = VK_FALSE;
+	multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+	// minSampleShading, pSampleMask, alphaToCoverageEnable, alphaToOneEnable
+
+	// depth/stencil test
+	VkPipelineDepthStencilStateCreateInfo depthtest{};
+	//depthtest = nullptr;
+
+	// color blending - additive or bitwise operation on framebuffer
+	VkPipelineColorBlendAttachmentState colorBlendAttachment{};
+	colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | \
+		VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+	colorBlendAttachment.blendEnable = VK_FALSE;
+	//srcColorBlendFactor, dstColorBlendFactor, colorBlendOp, srcAlphaBlendFactor, dstAlphaBlendFactor, alphaBlendOp
+	// 1, 0, add, 1, 0, add
+	// alpha blending example on page 115. this struct is PER FRAMEBUFFER.
+
+	// this is for all framebuffers
+	VkPipelineColorBlendStateCreateInfo colorBlending{};
+	colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+	colorBlending.logicOpEnable = VK_FALSE; // if this is true, blendEnable is set to false on all fbs
+	colorBlending.attachmentCount = 1;
+	colorBlending.pAttachments = &colorBlendAttachment;
+	// logicOp, blendConstants[4]
+
+	// Configure what states can be reconfigured at runtime:
+	VkDynamicState dynamicStates[] = {
+		VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_LINE_WIDTH
+	};
+	VkPipelineDynamicStateCreateInfo dynamicState{};
+	dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+	dynamicState.dynamicStateCount = 2;
+	dynamicState.pDynamicStates = dynamicStates;
+
+	// create pipeline layout for shaders
+	VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
+	pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+	//setLayoutCount, pSetLayouts, pushConstantRangeCount, pPushConstantRanges
+	if(vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &pipelineLayout)!=VK_SUCCESS)
+		throw std::runtime_error("Could not create pipeline layout!\n");
+	
+	#ifdef DEBUG 
+		printf("DEBUG: Pipeline layout created successfully.\n");
+	#endif 
+
+	// assemble pipeline from layout
+	VkGraphicsPipelineCreateInfo pipelineInfo{};
+	pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+	pipelineInfo.stageCount = 2;
+	pipelineInfo.pStages = shaderStages; // just vert and frag
+	pipelineInfo.pVertexInputState = &vertexInputInfo;
+	pipelineInfo.pInputAssemblyState = &inputAssembly;
+	pipelineInfo.pViewportState = &viewportState;
+	pipelineInfo.pRasterizationState = &rasterizer;
+	pipelineInfo.pMultisampleState = &multisampling;
+	pipelineInfo.pDepthStencilState = nullptr;
+	pipelineInfo.pColorBlendState = &colorBlending;
+	pipelineInfo.pDynamicState = nullptr;
+	pipelineInfo.layout = pipelineLayout;
+	pipelineInfo.renderPass = renderPass;
+	pipelineInfo.subpass = 0; // subpass index
+	// pipeline derivitive - optional:
+	pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
+	pipelineInfo.basePipelineIndex = -1;
+	// the null is pipline cache which can be reused to make more pipelines
+	if(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline)!=VK_SUCCESS)
+		throw std::runtime_error("Couldn't create graphics pipeline!\n");
+
+	#ifdef DEBUG 
+		printf("DEBUG: Graphics pipeline assembled OK!\n");
+	#endif 
 
 	// destroy the shader modules after the pipeline is done
 	vkDestroyShaderModule(device, fragShaderModule, nullptr);
@@ -141,16 +451,6 @@ void HelloTriangleApplication::createSurface()
 
 void HelloTriangleApplication::createLogicalDevice()
 {
-	/*
-	QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
-	
-	VkDeviceQueueCreateInfo queueCreateInfo{}; // creates empty struct
-	queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-	queueCreateInfo.queueFamilyIndex = indices.graphicsFamily.value();
-	queueCreateInfo.queueCount = 1;
-	float queuePriority = 1.0f; // < REQUIRED!!
-	queueCreateInfo.pQueuePriorities = &queuePriority;
-	*/
 	// create presentation queue:
 	QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
 	std::vector<VkDeviceQueueCreateInfo> queueCreateInfos; // create array of structs
@@ -366,6 +666,18 @@ void HelloTriangleApplication::setupDebugMessenger()
 // * APP CLEANUP * // 
 void HelloTriangleApplication::cleanup()
 {
+	//vkDestroySemaphore(device, renderFinishedSemaphore, nullptr);
+	//vkDestroySemaphore(device, imageAvailableSemaphore, nullptr);
+
+	vkDestroyCommandPool(device, commandPool, nullptr);
+
+	for(auto framebuffer:swapChainFramebuffers)
+		vkDestroyFramebuffer(device, framebuffer, nullptr);
+
+	vkDestroyPipeline(device, graphicsPipeline, nullptr);
+	vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
+	vkDestroyRenderPass(device, renderPass, nullptr);
+
 	for (auto imageView:swapChainImageViews)
 	{
 		vkDestroyImageView(device, imageView, nullptr);
